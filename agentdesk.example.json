@@ -1,0 +1,29 @@
+{
+  "project_name": "AgentDesk",
+  "provider": {
+    "name": "anthropic",
+    "api_key": "",
+    "model": "claude-3-5-sonnet-20241022",
+    "max_tokens": 4096,
+    "temperature": 0.7
+  },
+  "mcp_servers": [
+    {
+      "name": "google_calendar",
+      "enabled": true
+    },
+    {
+      "name": "google_maps",
+      "enabled": true
+    },
+    {
+      "name": "jobber",
+      "enabled": true
+    }
+  ],
+  "agent": {
+    "max_iterations": 20,
+    "temperature": 0.7,
+    "system_prompt": "You are AgentDesk, an AI assistant for trades businesses."
+  }
+}

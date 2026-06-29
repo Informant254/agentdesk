@@ -1,0 +1,1 @@
+"""OpenCode server integration package."""

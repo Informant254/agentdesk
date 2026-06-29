@@ -1,0 +1,54 @@
+[project]
+name = "agentdesk"
+version = "0.1.0"
+description = "AI Agent for trades businesses - scheduling, dispatch, invoicing"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp>=0.1.0",
+    "langgraph>=0.2.0",
+    "langchain>=0.3.0",
+    "langchain-anthropic>=0.3.0",
+    "langchain-core>=0.3.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "supabase>=2.0.0",
+    "stripe>=7.0.0",
+    "cryptography>=42.0.0",
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    "opentelemetry-api>=1.25.0",
+    "opentelemetry-sdk>=1.25.0",
+    "uvicorn>=0.30.0",
+    "fastapi>=0.111.0",
+    "click>=8.1.0",
+    "rich>=13.0.0",
+    "prompt_toolkit>=3.0.0",
+]
+
+[project.scripts]
+agentdesk = "backend.cli.main:cli"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+    "textual>=0.70.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B"]
+
+[tool.setuptools.packages.find]
+include = ["backend*"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true

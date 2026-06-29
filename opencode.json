@@ -1,0 +1,31 @@
+{
+  "mcpServers": {
+    "agentdesk-calendar": {
+      "command": "python",
+      "args": ["-m", "backend.mcp_servers.google_calendar"],
+      "env": {
+        "GOOGLE_CALENDAR_CLIENT_ID": "",
+        "GOOGLE_CALENDAR_CLIENT_SECRET": ""
+      }
+    },
+    "agentdesk-maps": {
+      "command": "python",
+      "args": ["-m", "backend.mcp_servers.google_maps"],
+      "env": {
+        "GOOGLE_MAPS_API_KEY": ""
+      }
+    },
+    "agentdesk-jobber": {
+      "command": "python",
+      "args": ["-m", "backend.mcp_servers.jobber"],
+      "env": {
+        "JOBBER_API_KEY": ""
+      }
+    }
+  },
+  "provider": {
+    "anthropic": {
+      "api_key": ""
+    }
+  }
+}
