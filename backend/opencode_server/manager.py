@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 from backend.config import settings
+from backend.security import credentials_store
 
 _BASE_PORT = 4097
 _MAX_USERS = 50
@@ -89,21 +90,39 @@ class OpenCodeManager:
         self._instances: dict[str, UserOpenCodeProcess] = {}
         self._port_pool: list[int] = list(range(_BASE_PORT, _BASE_PORT + _MAX_USERS))
         self._user_providers: dict[str, dict[str, str]] = {}
+        self._loaded_users: set[str] = set()
         self._lock = asyncio.Lock()
 
     # ── Provider key management ────────────────────────────────────────────
+    # Keys are cached in memory for the life of the process, but the
+    # source of truth is Supabase (table: provider_keys) so they survive
+    # restarts/redeploys — Render's free tier spins the service down on
+    # idle, which used to wipe this entirely.
 
-    def save_provider_key(self, user_id: str, provider: str, encrypted_key: str):
+    async def _ensure_loaded(self, user_id: str):
+        """Lazy-load this user's provider keys from Supabase into memory."""
+        if user_id in self._loaded_users:
+            return
+        keys = await credentials_store.load_keys(user_id)
+        if keys:
+            self._user_providers.setdefault(user_id, {}).update(keys)
+        self._loaded_users.add(user_id)
+
+    async def save_provider_key(self, user_id: str, provider: str, encrypted_key: str):
         if user_id not in self._user_providers:
             self._user_providers[user_id] = {}
         self._user_providers[user_id][provider] = encrypted_key
+        self._loaded_users.add(user_id)
+        await credentials_store.save_key(user_id, provider, encrypted_key)
 
-    def get_provider_keys(self, user_id: str) -> dict[str, str]:
+    async def get_provider_keys(self, user_id: str) -> dict[str, str]:
+        await self._ensure_loaded(user_id)
         return self._user_providers.get(user_id, {})
 
-    def get_decrypted_keys(self, user_id: str) -> dict[str, str]:
+    async def get_decrypted_keys(self, user_id: str) -> dict[str, str]:
         """Return a dict of provider → plaintext API key for the given user."""
         from backend.security.encryption import decrypt_data
+        await self._ensure_loaded(user_id)
         result: dict[str, str] = {}
         for provider, encrypted in self._user_providers.get(user_id, {}).items():
             try:
@@ -112,10 +131,13 @@ class OpenCodeManager:
                 pass
         return result
 
-    def delete_provider_key(self, user_id: str, provider: str):
+    async def delete_provider_key(self, user_id: str, provider: str):
+        await self._ensure_loaded(user_id)
         self._user_providers.get(user_id, {}).pop(provider, None)
+        await credentials_store.delete_key(user_id, provider)
 
-    def list_providers(self, user_id: str) -> list[str]:
+    async def list_providers(self, user_id: str) -> list[str]:
+        await self._ensure_loaded(user_id)
         return list(self._user_providers.get(user_id, {}).keys())
 
     # ── Process lifecycle ──────────────────────────────────────────────────
@@ -156,6 +178,7 @@ class OpenCodeManager:
         return env
 
     async def get_or_start(self, user_id: str) -> dict[str, Any]:
+        await self._ensure_loaded(user_id)
         await self._cleanup_idle()
         async with self._lock:
             instance = self._instances.get(user_id)
@@ -243,6 +266,7 @@ class OpenCodeManager:
             return False
 
     async def status(self, user_id: str) -> dict[str, Any]:
+        await self._ensure_loaded(user_id)
         instance = self._instances.get(user_id)
         if not instance:
             return {"status": "not_started"}
@@ -253,7 +277,7 @@ class OpenCodeManager:
             "port": instance.port,
             "url": instance.url,
             "pid": instance.process.pid if instance.process else None,
-            "providers": self.list_providers(user_id),
+            "providers": list(self._user_providers.get(user_id, {}).keys()),
         }
 
     def get_api_base(self, user_id: str) -> str | None:
