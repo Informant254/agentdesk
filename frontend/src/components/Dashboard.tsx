@@ -6,10 +6,11 @@ import { ChatPanel } from "./ChatPanel";
 import { SchedulePanel } from "./SchedulePanel";
 import { InvoicesPanel } from "./InvoicesPanel";
 import { OpenCodePanel } from "./opencode";
+import { ProfilePanel } from "./ProfilePanel";
 import { supabase } from "@/lib/supabase";
 import { setAuthToken } from "@/lib/api";
 
-type Panel = "chat" | "schedule" | "invoices" | "opencode";
+type Panel = "chat" | "schedule" | "invoices" | "opencode" | "profile";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://agentdesk-mzx6.onrender.com";
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://agentdesk-v2.netlify.app";
@@ -55,13 +56,14 @@ export function Dashboard() {
   }
 
   return (
-    <div className="flex h-screen">
+    <div className="flex h-screen bg-slate-50">
       <Sidebar activePanel={activePanel} onNavigate={setActivePanel} />
-      <main className="flex-1 overflow-hidden">
-        {activePanel === "chat" && <ChatPanel />}
+      <main className="flex-1 overflow-hidden flex">
+        {activePanel === "chat"     && <ChatPanel />}
         {activePanel === "opencode" && <OpenCodePanel />}
         {activePanel === "schedule" && <SchedulePanel />}
         {activePanel === "invoices" && <InvoicesPanel />}
+        {activePanel === "profile"  && <ProfilePanel />}
       </main>
     </div>
   );
