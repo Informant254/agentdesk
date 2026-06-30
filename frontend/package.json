@@ -2,9 +2,12 @@
   "name": "agentdesk-frontend",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=18.17.0"
+  },
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build 2>&1",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit"
