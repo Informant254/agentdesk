@@ -16,7 +16,7 @@ from backend.security.encryption import decrypt_data, encrypt_data
 router = APIRouter(prefix="/api/opencode", tags=["opencode"])
 
 
-# ── Auth helper ───────────────────────────────────────────────────────────────
+# ── Auth helper ───────────────────────────────────────────────────────────────────────────────────────────────
 
 async def _require_user(token: dict = Depends(auth_manager.verify_token)) -> str:
     if not token:
@@ -24,7 +24,7 @@ async def _require_user(token: dict = Depends(auth_manager.verify_token)) -> str
     return token.get("sub", "")
 
 
-# ── Server lifecycle ──────────────────────────────────────────────────────────
+# ── Server lifecycle ────────────────────────────────────────────────────────────────────────────────────────────────
 
 @router.post("/start")
 async def start_opencode_server(user_id: str = Depends(_require_user)):
@@ -41,7 +41,7 @@ async def opencode_status(user_id: str = Depends(_require_user)):
     return await opencode_manager.status(user_id)
 
 
-# ── Provider management ───────────────────────────────────────────────────────
+# ── Provider management ─────────────────────────────────────────────────────────────────────────────────────────────
 
 SUPPORTED_PROVIDERS = [
     {"id": "anthropic",  "name": "Anthropic (Claude)",     "env": "ANTHROPIC_API_KEY",             "url": "https://console.anthropic.com/keys"},
@@ -62,7 +62,7 @@ _VALID_PROVIDER_IDS = {p["id"] for p in SUPPORTED_PROVIDERS}
 
 @router.get("/providers")
 async def list_providers(user_id: str = Depends(_require_user)):
-    configured = set(opencode_manager.list_providers(user_id))
+    configured = set(await opencode_manager.list_providers(user_id))
     return {"providers": [{**p, "connected": p["id"] in configured} for p in SUPPORTED_PROVIDERS]}
 
 
@@ -79,7 +79,7 @@ async def save_provider_key(req: SaveProviderKeyRequest, user_id: str = Depends(
         raise HTTPException(status_code=400, detail="API key cannot be empty")
 
     encrypted = encrypt_data(req.api_key.strip())
-    opencode_manager.save_provider_key(user_id, req.provider, encrypted)
+    await opencode_manager.save_provider_key(user_id, req.provider, encrypted)
 
     # Restart so the new key is in the env
     if (await opencode_manager.status(user_id)).get("status") == "running":
@@ -91,7 +91,7 @@ async def save_provider_key(req: SaveProviderKeyRequest, user_id: str = Depends(
 
 @router.delete("/providers/{provider}")
 async def delete_provider_key(provider: str, user_id: str = Depends(_require_user)):
-    opencode_manager.delete_provider_key(user_id, provider)
+    await opencode_manager.delete_provider_key(user_id, provider)
     # Restart so the key is removed from env
     if (await opencode_manager.status(user_id)).get("status") == "running":
         await opencode_manager.stop_user(user_id)
@@ -99,7 +99,7 @@ async def delete_provider_key(provider: str, user_id: str = Depends(_require_use
     return {"success": True, "provider": provider}
 
 
-# ── Session management ────────────────────────────────────────────────────────
+# ── Session management ──────────────────────────────────────────────────────────────────────────────────────────────
 
 async def _ensure_running(user_id: str) -> str:
     base = opencode_manager.get_api_base(user_id)
@@ -174,7 +174,7 @@ async def abort_session(session_id: str, user_id: str = Depends(_require_user)):
         return resp.json()
 
 
-# ── WebSocket proxy ────────────────────────────────────────────────────────────
+# ── WebSocket proxy ───────────────────────────────────────────────────────────────────────────────────────────────
 
 @router.websocket("/ws/{session_id}")
 async def websocket_proxy(websocket: WebSocket, session_id: str):
@@ -191,7 +191,7 @@ async def websocket_proxy(websocket: WebSocket, session_id: str):
     """
     await websocket.accept()
 
-    # ── Auth handshake ─────────────────────────────────────────────────────
+    # ── Auth handshake ────────────────────────────────────────────────────────────────────────
     try:
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=10)
         init = json.loads(raw)
@@ -222,10 +222,10 @@ async def websocket_proxy(websocket: WebSocket, session_id: str):
 
     await websocket.send_json({
         "type": "connected",
-        "providers": opencode_manager.list_providers(user_id),
+        "providers": await opencode_manager.list_providers(user_id),
     })
 
-    # ── Main loop ──────────────────────────────────────────────────────────
+    # ── Main loop ──────────────────────────────────────────────────────────────────────────────────────
     last_message_id: str | None = None   # deduplication cursor
 
     try:
