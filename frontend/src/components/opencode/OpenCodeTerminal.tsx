@@ -1,5 +1,6 @@
 "use client";
 
+import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Loader, RefreshCw, Wifi, WifiOff, Settings } from "lucide-react";
 
@@ -34,7 +35,6 @@ export function OpenCodeTerminal({ sessionId, authToken, onOpenProviders }: Open
     const { Terminal }      = await import("@xterm/xterm");
     const { FitAddon }      = await import("@xterm/addon-fit");
     const { WebLinksAddon } = await import("@xterm/addon-web-links");
-    await import("@xterm/xterm/css/xterm.css");
 
     if (termRef.current) termRef.current.dispose();
     if (wsRef.current)   wsRef.current.close();

@@ -8,7 +8,7 @@ import { InvoicesPanel } from "./InvoicesPanel";
 import { OpenCodePanel, ProvidersPanel } from "./opencode";
 import { ProfilePanel } from "./ProfilePanel";
 import { supabase } from "@/lib/supabase";
-import { setAuthToken, getAuthToken } from "@/lib/api";
+import { setAuthToken } from "@/lib/api";
 
 type Panel = "chat" | "schedule" | "invoices" | "opencode" | "providers" | "profile";
 
