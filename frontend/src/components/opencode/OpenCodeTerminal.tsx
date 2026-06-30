@@ -2,7 +2,7 @@
 
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Loader, RefreshCw, Wifi, WifiOff, Settings } from "lucide-react";
+import { Loader, RefreshCw, Wifi, WifiOff, Settings, AlertTriangle } from "lucide-react";
 
 interface TerminalSession {
   id: string;
@@ -113,6 +113,11 @@ export function OpenCodeTerminal({ sessionId, authToken, onOpenProviders }: Open
 
         if (msg.type === "error") {
           term.writeln(`\x1b[31m  ✗ ${msg.message as string}\x1b[0m`);
+          if ((msg.message as string)?.includes("OpenCode")) {
+            term.writeln("\x1b[90m  → The OpenCode binary may not be installed on the server.\x1b[0m");
+            term.writeln("\x1b[90m  → Check server logs or redeploy the backend.\x1b[0m");
+          }
+          setIsConnecting(false);
           term.write("\x1b[1;36m❯\x1b[0m ");
         }
       } catch { /* ignore parse errors */ }
@@ -127,6 +132,7 @@ export function OpenCodeTerminal({ sessionId, authToken, onOpenProviders }: Open
       setIsConnected(false);
       setIsConnecting(false);
       term.writeln("\x1b[31m  ✗ Failed to connect to OpenCode server\x1b[0m");
+      term.writeln("\x1b[90m  → Check that the backend is running and reachable\x1b[0m");
       term.write("\x1b[1;36m❯\x1b[0m ");
     };
 
@@ -213,6 +219,7 @@ export function OpenCodeSessionManager({ authToken, onSessionSelect, onOpenProvi
   const [sessions,     setSessions]     = useState<TerminalSession[]>([]);
   const [loading,      setLoading]      = useState(true);
   const [serverStatus, setServerStatus] = useState<"checking" | "running" | "stopped" | "error">("checking");
+  const [serverError,  setServerError]  = useState<string | null>(null);
   const [creating,     setCreating]     = useState(false);
 
   const fetchSessions = useCallback(async () => {
@@ -236,6 +243,7 @@ export function OpenCodeSessionManager({ authToken, onSessionSelect, onOpenProvi
       if (res.ok) {
         const data = await res.json() as { status: string };
         setServerStatus(data.status === "running" ? "running" : "stopped");
+        setServerError(null);
       } else {
         setServerStatus("error");
       }
@@ -247,19 +255,35 @@ export function OpenCodeSessionManager({ authToken, onSessionSelect, onOpenProvi
   const startServer = useCallback(async () => {
     if (!authToken) return;
     setServerStatus("checking");
+    setServerError(null);
     try {
       const res = await fetch(`${API_HTTP}/api/opencode/start`, {
         method: "POST",
         headers: { Authorization: `Bearer ${authToken}` },
       });
       if (res.ok) {
-        setServerStatus("running");
-        await fetchSessions();
+        const data = await res.json() as { status: string; error?: string };
+        if (data.status === "started" || data.status === "running") {
+          setServerStatus("running");
+          setServerError(null);
+          await fetchSessions();
+        } else {
+          // Server returned 200 but opencode failed to start
+          setServerStatus("error");
+          setServerError(data.error ?? "OpenCode failed to start");
+        }
       } else {
         setServerStatus("error");
+        try {
+          const err = await res.json() as { detail?: string };
+          setServerError(err.detail ?? `Server error ${res.status}`);
+        } catch {
+          setServerError(`Server error ${res.status}`);
+        }
       }
-    } catch {
+    } catch (e) {
       setServerStatus("error");
+      setServerError(e instanceof Error ? e.message : "Network error");
     }
   }, [authToken, fetchSessions]);
 
@@ -307,6 +331,16 @@ export function OpenCodeSessionManager({ authToken, onSessionSelect, onOpenProvi
           </span>
         </div>
       </div>
+
+      {serverError && (
+        <div className="mx-4 mt-3 p-3 bg-[#f85149]/10 border border-[#f85149]/30 rounded-lg flex items-start gap-2">
+          <AlertTriangle size={14} className="text-[#f85149] mt-0.5 shrink-0" />
+          <div>
+            <p className="text-[#f85149] text-xs font-medium">OpenCode failed to start</p>
+            <p className="text-[#8b949e] text-xs mt-1 font-mono break-all">{serverError}</p>
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto p-4 space-y-2">
         {loading ? (
