@@ -47,6 +47,9 @@ export const sendChatMessage = (message: string, context?: Record<string, unknow
     body: JSON.stringify({ message, context }),
   });
 
+// Alias kept for ChatPanel.tsx compatibility
+export const sendMessage = sendChatMessage;
+
 // Workflows
 export const getDailySchedule = (date: string) =>
   apiFetch(`/api/workflows/daily-schedule/${date}`);
