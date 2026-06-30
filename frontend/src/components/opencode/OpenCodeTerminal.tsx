@@ -15,93 +15,82 @@ interface OpenCodeTerminalProps {
   onOpenProviders?: () => void;
 }
 
-// Derive the API base from env (falls back to Render URL)
 const API_HTTP = process.env.NEXT_PUBLIC_API_URL || "https://agentdesk-mzx6.onrender.com";
-const API_WS   = API_HTTP.replace(/^https?:\/\//, m => (m === "https://" ? "wss://" : "ws://"));
+const API_WS   = API_HTTP.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
 
 export function OpenCodeTerminal({ sessionId, authToken, onOpenProviders }: OpenCodeTerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
-  const termRef     = useRef<unknown>(null);
+  const termRef     = useRef<{ dispose(): void; writeln(s: string): void; write(s: string): void; onKey(h: (e: { key: string; domEvent: KeyboardEvent }) => void): void } | null>(null);
   const wsRef       = useRef<WebSocket | null>(null);
-  const fitAddonRef = useRef<unknown>(null);
+  const fitRef      = useRef<{ fit(): void } | null>(null);
 
-  const [isConnected,  setIsConnected]  = useState(false);
-  const [isConnecting, setIsConnecting] = useState(false);
+  const [isConnected,        setIsConnected]        = useState(false);
+  const [isConnecting,       setIsConnecting]       = useState(false);
   const [connectedProviders, setConnectedProviders] = useState<string[]>([]);
 
   const connectTerminal = useCallback(async (sid: string) => {
     if (!terminalRef.current || !authToken) return;
 
-    const { Terminal }     = await import("@xterm/xterm");
-    const { FitAddon }     = await import("@xterm/addon-fit");
-    const { WebLinksAddon} = await import("@xterm/addon-web-links");
+    const { Terminal }      = await import("@xterm/xterm");
+    const { FitAddon }      = await import("@xterm/addon-fit");
+    const { WebLinksAddon } = await import("@xterm/addon-web-links");
+    await import("@xterm/xterm/css/xterm.css");
 
-    // Dispose existing
-    if (termRef.current)  (termRef.current as { dispose(): void }).dispose();
-    if (wsRef.current)    wsRef.current.close();
+    if (termRef.current) termRef.current.dispose();
+    if (wsRef.current)   wsRef.current.close();
 
     setIsConnecting(true);
 
     const term = new Terminal({
       theme: {
-        background:          "#0d1117",
-        foreground:          "#c9d1d9",
-        cursor:              "#58a6ff",
-        cursorAccent:        "#0d1117",
-        selectionBackground: "rgba(56,139,253,0.4)",
-        black:   "#0d1117", red:     "#ff7b72", green:   "#3fb950",
-        yellow:  "#d29922",  blue:    "#58a6ff", magenta: "#bc8cff",
-        cyan:    "#39c5cf",  white:   "#c9d1d9",
-        brightBlack:   "#484f58", brightRed:     "#ffa198",
-        brightGreen:   "#56d364", brightYellow:  "#e3b341",
-        brightBlue:    "#79c0ff", brightMagenta: "#d2a8ff",
-        brightCyan:    "#56d4dd", brightWhite:   "#f0f6fc",
+        background: "#0d1117", foreground: "#c9d1d9", cursor: "#58a6ff",
+        cursorAccent: "#0d1117", selectionBackground: "rgba(56,139,253,0.4)",
+        black: "#0d1117",   red: "#ff7b72",     green: "#3fb950",
+        yellow: "#d29922",  blue: "#58a6ff",    magenta: "#bc8cff",
+        cyan: "#39c5cf",    white: "#c9d1d9",
+        brightBlack: "#484f58",   brightRed: "#ffa198",
+        brightGreen: "#56d364",   brightYellow: "#e3b341",
+        brightBlue: "#79c0ff",    brightMagenta: "#d2a8ff",
+        brightCyan: "#56d4dd",    brightWhite: "#f0f6fc",
       },
-      fontFamily:      "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
-      fontSize:        14,
-      lineHeight:      1.4,
-      cursorBlink:     true,
-      cursorStyle:     "bar",
-      scrollback:      10000,
-      allowProposedApi: true,
+      fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+      fontSize: 14, lineHeight: 1.4, cursorBlink: true, cursorStyle: "bar",
+      scrollback: 10000, allowProposedApi: true,
     });
 
-    const fitAddon     = new FitAddon();
-    const webLinksAddon = new WebLinksAddon();
+    const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
-    term.loadAddon(webLinksAddon);
+    term.loadAddon(new WebLinksAddon());
     term.open(terminalRef.current);
     setTimeout(() => fitAddon.fit(), 100);
 
-    termRef.current    = term;
-    fitAddonRef.current = fitAddon;
+    termRef.current = term;
+    fitRef.current  = fitAddon;
 
     term.writeln("\x1b[1;34m  AgentDesk Terminal\x1b[0m");
     term.writeln("\x1b[90m  Powered by OpenCode — connecting…\x1b[0m");
     term.writeln("");
 
-    // ── WebSocket ──────────────────────────────────────────────────────
     const ws = new WebSocket(`${API_WS}/api/opencode/ws/${sid}`);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      // Send auth as first message
       ws.send(JSON.stringify({ type: "auth", token: authToken }));
     };
 
     ws.onmessage = (event) => {
       try {
-        const msg = JSON.parse(event.data);
+        const msg = JSON.parse(event.data as string);
 
         if (msg.type === "connected") {
           setIsConnected(true);
           setIsConnecting(false);
-          setConnectedProviders(msg.providers || []);
+          setConnectedProviders(msg.providers ?? []);
           term.writeln("\x1b[32m  ✓ Connected to OpenCode\x1b[0m");
-          if (msg.providers?.length > 0) {
-            term.writeln(`\x1b[90m  Providers: ${msg.providers.join(", ")}\x1b[0m`);
+          if ((msg.providers ?? []).length > 0) {
+            term.writeln(`\x1b[90m  Active providers: ${(msg.providers as string[]).join(", ")}\x1b[0m`);
           } else {
-            term.writeln("\x1b[33m  ⚠ No providers configured — go to AI Providers to add your API keys\x1b[0m");
+            term.writeln("\x1b[33m  ⚠  No AI providers configured — click \"Add API keys\" above\x1b[0m");
           }
           term.writeln("");
           term.write("\x1b[1;36m❯\x1b[0m ");
@@ -109,12 +98,11 @@ export function OpenCodeTerminal({ sessionId, authToken, onOpenProviders }: Open
         }
 
         if (msg.type === "message") {
-          const data = msg.data;
+          const data = msg.data as { parts?: { type: string; text: string }[] };
           if (data?.parts) {
             for (const part of data.parts) {
               if (part.type === "text") {
-                const lines = part.text.split("\n");
-                for (const line of lines) term.writeln(line);
+                for (const line of part.text.split("\n")) term.writeln(line);
               }
             }
           }
@@ -124,36 +112,29 @@ export function OpenCodeTerminal({ sessionId, authToken, onOpenProviders }: Open
         }
 
         if (msg.type === "error") {
-          term.writeln(`\x1b[31m  ✗ ${msg.message}\x1b[0m`);
+          term.writeln(`\x1b[31m  ✗ ${msg.message as string}\x1b[0m`);
           term.write("\x1b[1;36m❯\x1b[0m ");
-          return;
         }
-      } catch {
-        // ignore parse errors
-      }
+      } catch { /* ignore parse errors */ }
     };
 
     ws.onclose = () => {
       setIsConnected(false);
-      if (termRef.current) {
-        term.writeln("\n\x1b[33m  Connection closed\x1b[0m");
-      }
+      term.writeln("\n\x1b[33m  Connection closed\x1b[0m");
     };
 
     ws.onerror = () => {
       setIsConnected(false);
       setIsConnecting(false);
-      term.writeln("\x1b[31m  Failed to connect to OpenCode server\x1b[0m");
+      term.writeln("\x1b[31m  ✗ Failed to connect to OpenCode server\x1b[0m");
       term.write("\x1b[1;36m❯\x1b[0m ");
     };
 
-    // ── Input handling ─────────────────────────────────────────────────
+    // Input handling
     let inputBuffer = "";
     term.onKey(({ key, domEvent }) => {
       const code = domEvent.keyCode;
-
       if (code === 13) {
-        // Enter — send message
         const content = inputBuffer.trim();
         term.writeln("");
         inputBuffer = "";
@@ -163,40 +144,30 @@ export function OpenCodeTerminal({ sessionId, authToken, onOpenProviders }: Open
           term.write("\x1b[1;36m❯\x1b[0m ");
         }
       } else if (code === 8) {
-        // Backspace
         if (inputBuffer.length > 0) {
           inputBuffer = inputBuffer.slice(0, -1);
           term.write("\b \b");
         }
-      } else if (key) {
+      } else {
         inputBuffer += key;
         term.write(key);
       }
     });
 
-    // ── Resize observer ─────────────────────────────────────────────────
-    const ro = new ResizeObserver(() => {
-      try { (fitAddonRef.current as { fit(): void })?.fit(); } catch {}
-    });
+    const ro = new ResizeObserver(() => { try { fitRef.current?.fit(); } catch { /* ignore */ } });
     if (terminalRef.current) ro.observe(terminalRef.current);
 
-    return () => {
-      ro.disconnect();
-      ws.close();
-      term.dispose();
-    };
+    return () => { ro.disconnect(); ws.close(); term.dispose(); };
   }, [authToken]);
 
   useEffect(() => {
-    const cleanup = connectTerminal(sessionId);
-    return () => { cleanup?.then(fn => fn?.()); };
+    let cleanup: (() => void) | undefined;
+    connectTerminal(sessionId).then(fn => { cleanup = fn; });
+    return () => { cleanup?.(); };
   }, [sessionId, connectTerminal]);
-
-  const handleReconnect = () => connectTerminal(sessionId);
 
   return (
     <div className="flex flex-col h-full bg-[#0d1117]">
-      {/* Status bar */}
       <div className="flex items-center justify-between px-4 py-1.5 bg-[#161b22] border-b border-[#30363d] text-xs">
         <div className="flex items-center gap-2">
           {isConnecting ? (
@@ -212,32 +183,24 @@ export function OpenCodeTerminal({ sessionId, authToken, onOpenProviders }: Open
         </div>
         <div className="flex items-center gap-2">
           {connectedProviders.length === 0 && onOpenProviders && (
-            <button
-              onClick={onOpenProviders}
-              className="flex items-center gap-1 px-2 py-0.5 bg-[#d29922]/20 text-[#d29922] rounded hover:bg-[#d29922]/30 transition-colors"
-            >
-              <Settings size={11} />
-              Add API keys
+            <button onClick={onOpenProviders}
+              className="flex items-center gap-1 px-2 py-0.5 bg-[#d29922]/20 text-[#d29922] rounded hover:bg-[#d29922]/30 transition-colors">
+              <Settings size={11} />Add API keys
             </button>
           )}
-          <button
-            onClick={handleReconnect}
-            className="flex items-center gap-1 text-[#8b949e] hover:text-white transition-colors"
-          >
-            <RefreshCw size={12} />
-            Reconnect
+          <button onClick={() => connectTerminal(sessionId)}
+            className="flex items-center gap-1 text-[#8b949e] hover:text-white transition-colors">
+            <RefreshCw size={12} />Reconnect
           </button>
         </div>
       </div>
-
-      {/* Terminal */}
       <div ref={terminalRef} className="flex-1 min-h-0 p-2" />
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Session manager component
+// Session manager
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface OpenCodeSessionManagerProps {
@@ -246,24 +209,32 @@ interface OpenCodeSessionManagerProps {
   onOpenProviders?: () => void;
 }
 
-export function OpenCodeSessionManager({
-  authToken,
-  onSessionSelect,
-  onOpenProviders,
-}: OpenCodeSessionManagerProps) {
-  const [sessions,      setSessions]      = useState<TerminalSession[]>([]);
-  const [loading,       setLoading]       = useState(true);
-  const [serverStatus,  setServerStatus]  = useState<"checking" | "running" | "stopped" | "error">("checking");
-  const [creating,      setCreating]      = useState(false);
+export function OpenCodeSessionManager({ authToken, onSessionSelect, onOpenProviders }: OpenCodeSessionManagerProps) {
+  const [sessions,     setSessions]     = useState<TerminalSession[]>([]);
+  const [loading,      setLoading]      = useState(true);
+  const [serverStatus, setServerStatus] = useState<"checking" | "running" | "stopped" | "error">("checking");
+  const [creating,     setCreating]     = useState(false);
 
-  const headers = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+  const fetchSessions = useCallback(async () => {
+    if (!authToken) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_HTTP}/api/opencode/sessions`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (res.ok) setSessions(await res.json() as TerminalSession[]);
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
+  }, [authToken]);
 
   const checkServer = useCallback(async () => {
     if (!authToken) return;
     try {
-      const res = await fetch(`${API_HTTP}/api/opencode/status`, { headers });
+      const res = await fetch(`${API_HTTP}/api/opencode/status`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
       if (res.ok) {
-        const data = await res.json();
+        const data = await res.json() as { status: string };
         setServerStatus(data.status === "running" ? "running" : "stopped");
       } else {
         setServerStatus("error");
@@ -277,27 +248,20 @@ export function OpenCodeSessionManager({
     if (!authToken) return;
     setServerStatus("checking");
     try {
-      const res = await fetch(`${API_HTTP}/api/opencode/start`, { method: "POST", headers });
+      const res = await fetch(`${API_HTTP}/api/opencode/start`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
       if (res.ok) {
         setServerStatus("running");
-        fetchSessions();
+        await fetchSessions();
       } else {
         setServerStatus("error");
       }
     } catch {
       setServerStatus("error");
     }
-  }, [authToken]);
-
-  const fetchSessions = useCallback(async () => {
-    if (!authToken) return;
-    setLoading(true);
-    try {
-      const res = await fetch(`${API_HTTP}/api/opencode/sessions`, { headers });
-      if (res.ok) setSessions(await res.json());
-    } catch {}
-    finally { setLoading(false); }
-  }, [authToken]);
+  }, [authToken, fetchSessions]);
 
   const createSession = useCallback(async () => {
     if (!authToken) return;
@@ -305,14 +269,14 @@ export function OpenCodeSessionManager({
     try {
       const res = await fetch(`${API_HTTP}/api/opencode/sessions`, {
         method: "POST",
-        headers: { ...headers, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${authToken}`, "Content-Type": "application/json" },
         body: JSON.stringify({}),
       });
       if (res.ok) {
-        const session = await res.json();
+        const session = await res.json() as TerminalSession;
         onSessionSelect(session.id);
       }
-    } catch {}
+    } catch { /* ignore */ }
     finally { setCreating(false); }
   }, [authToken, onSessionSelect]);
 
@@ -322,36 +286,28 @@ export function OpenCodeSessionManager({
 
   return (
     <div className="flex flex-col h-full bg-[#0d1117]">
-      {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-[#30363d]">
         <span className="text-white text-sm font-medium">OpenCode Sessions</span>
         <div className="flex items-center gap-3">
           {onOpenProviders && (
-            <button
-              onClick={onOpenProviders}
-              className="flex items-center gap-1.5 text-xs text-[#8b949e] hover:text-[#58a6ff] transition-colors"
-            >
-              <Settings size={13} />
-              Providers
+            <button onClick={onOpenProviders}
+              className="flex items-center gap-1.5 text-xs text-[#8b949e] hover:text-[#58a6ff] transition-colors">
+              <Settings size={13} />Providers
             </button>
           )}
           <span className="flex items-center gap-1.5 text-xs">
             <span className={`w-1.5 h-1.5 rounded-full ${
-              serverStatus === "running" ? "bg-[#3fb950]"
-              : serverStatus === "checking" ? "bg-[#d29922] animate-pulse"
-              : "bg-[#f85149]"
+              serverStatus === "running"  ? "bg-[#3fb950]" :
+              serverStatus === "checking" ? "bg-[#d29922] animate-pulse" : "bg-[#f85149]"
             }`} />
             <span className="text-[#8b949e]">{serverStatus}</span>
             {serverStatus !== "running" && serverStatus !== "checking" && (
-              <button onClick={startServer} className="text-[#58a6ff] hover:underline ml-1">
-                Start
-              </button>
+              <button onClick={startServer} className="text-[#58a6ff] hover:underline ml-1">Start</button>
             )}
           </span>
         </div>
       </div>
 
-      {/* Session list */}
       <div className="flex-1 overflow-y-auto p-4 space-y-2">
         {loading ? (
           <div className="flex items-center justify-center py-12">
@@ -360,38 +316,27 @@ export function OpenCodeSessionManager({
         ) : sessions.length === 0 ? (
           <div className="text-center py-12">
             <p className="text-[#8b949e] text-sm mb-4">No sessions yet</p>
-            <button
-              onClick={createSession}
-              disabled={creating || serverStatus !== "running"}
-              className="px-4 py-2 bg-[#238636] hover:bg-[#2ea043] text-white text-sm rounded-md disabled:opacity-50 transition-colors"
-            >
+            <button onClick={createSession} disabled={creating || serverStatus !== "running"}
+              className="px-4 py-2 bg-[#238636] hover:bg-[#2ea043] text-white text-sm rounded-md disabled:opacity-50 transition-colors">
               {creating ? "Creating…" : "New Session"}
             </button>
           </div>
         ) : (
           <>
             {sessions.map(session => (
-              <button
-                key={session.id}
-                onClick={() => onSessionSelect(session.id)}
-                className="w-full text-left p-3 bg-[#161b22] hover:bg-[#1c2128] border border-[#30363d] rounded-lg transition-colors"
-              >
+              <button key={session.id} onClick={() => onSessionSelect(session.id)}
+                className="w-full text-left p-3 bg-[#161b22] hover:bg-[#1c2128] border border-[#30363d] rounded-lg transition-colors">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-white text-sm font-medium">{session.title || "Untitled session"}</p>
                     <p className="text-xs text-[#8b949e] mt-0.5">{session.id.slice(0, 12)}…</p>
                   </div>
-                  <span className="text-xs text-[#8b949e]">
-                    {new Date(session.created_at).toLocaleDateString()}
-                  </span>
+                  <span className="text-xs text-[#8b949e]">{new Date(session.created_at).toLocaleDateString()}</span>
                 </div>
               </button>
             ))}
-            <button
-              onClick={createSession}
-              disabled={creating || serverStatus !== "running"}
-              className="w-full p-3 border border-dashed border-[#30363d] rounded-lg text-[#8b949e] hover:text-white hover:border-[#58a6ff] text-sm transition-colors disabled:opacity-50"
-            >
+            <button onClick={createSession} disabled={creating || serverStatus !== "running"}
+              className="w-full p-3 border border-dashed border-[#30363d] rounded-lg text-[#8b949e] hover:text-white hover:border-[#58a6ff] text-sm transition-colors disabled:opacity-50">
               {creating ? "Creating…" : "+ New Session"}
             </button>
           </>
