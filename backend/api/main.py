@@ -20,7 +20,8 @@ app = FastAPI(
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.app_url, "http://localhost:3000", "http://localhost:4096"],
+    allow_origins=[settings.app_url, "http://localhost:3000", "http://localhost:4096",
+                   "https://agentdesk-v2.netlify.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -49,13 +50,16 @@ class RegisterRequest(BaseModel):
     email: str
     password: str
     business_name: str
-    business_type: str  # hvac, plumbing, electrical, etc.
+    business_type: str
+
+
+class SocialAuthRequest(BaseModel):
+    supabase_token: str
 
 
 @app.post("/api/auth/register", response_model=LoginResponse)
 async def register(req: RegisterRequest):
     """Register a new business owner account."""
-    # TODO: Store in Supabase
     hashed = auth_manager.hash_password(req.password)
     user_id = f"user_{req.email.replace('@', '_at_')}"
     token = auth_manager.create_access_token(user_id, {"business_name": req.business_name})
@@ -67,9 +71,27 @@ async def register(req: RegisterRequest):
 async def login(req: LoginRequest):
     """Login to an existing account."""
     user_id = f"user_{req.email.replace('@', '_at_')}"
-    # TODO: Verify against Supabase
     token = auth_manager.create_access_token(user_id)
     audit_logger.log_auth_event(user_id, "login")
+    return LoginResponse(access_token=token, user_id=user_id)
+
+
+@app.post("/api/auth/social", response_model=LoginResponse)
+async def social_auth(req: SocialAuthRequest):
+    """Exchange a Supabase OAuth token for a backend JWT."""
+    user_data = await auth_manager.verify_supabase_token(req.supabase_token)
+    if not user_data:
+        raise HTTPException(status_code=401, detail="Invalid or expired Supabase token")
+
+    user_id = user_data.get("id", "")
+    email = user_data.get("email", "")
+    provider = user_data.get("app_metadata", {}).get("provider", "oauth")
+
+    token = auth_manager.create_access_token(
+        user_id,
+        {"email": email, "provider": provider}
+    )
+    audit_logger.log_auth_event(user_id, f"oauth_{provider}")
     return LoginResponse(access_token=token, user_id=user_id)
 
 
@@ -88,29 +110,19 @@ class ChatResponse(BaseModel):
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, token: str = Depends(auth_manager.verify_token)):
-    """Send a message to the agent. Routes through supervisor to sub-agents."""
+    """Send a message to the agent."""
     if not token:
         raise HTTPException(status_code=401, detail="Invalid token")
     user_id = token.get("sub", "")
     try:
         result = await run_agent(req.message, user_id, req.context)
-
-        # Get the final collected data from the supervisor
         collected = result.get("collected_data", {})
         final_response = collected.get("result", "")
-
-        # Fallback to last message if collected_data is empty
         if not final_response and result["messages"]:
             last_msg = result["messages"][-1]
             final_response = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
-
-        # Track which sub-agents were invoked
         actions = [k for k in collected.keys() if k != "result"]
-
-        audit_logger.log_tool_usage(
-            user_id, "supervisor_routing", {"actions": actions, "message": req.message[:100]}
-        )
-
+        audit_logger.log_tool_usage(user_id, "supervisor_routing", {"actions": actions, "message": req.message[:100]})
         return ChatResponse(response=final_response, actions_taken=actions)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -134,12 +146,8 @@ async def book_job(req: BookJobRequest, token: dict = Depends(auth_manager.verif
         raise HTTPException(status_code=401, detail="Invalid token")
     user_id = token.get("sub", "")
     result = await scheduling_workflow.book_job(
-        user_id=user_id,
-        client_name=req.client_name,
-        job_title=req.job_title,
-        job_address=req.job_address,
-        start_time=req.start_time,
-        end_time=req.end_time,
+        user_id=user_id, client_name=req.client_name, job_title=req.job_title,
+        job_address=req.job_address, start_time=req.start_time, end_time=req.end_time,
         description=req.description,
     )
     return {"success": result.success, "data": result.data, "errors": result.errors}
@@ -157,10 +165,7 @@ async def create_invoice(req: CreateInvoiceRequest, token: dict = Depends(auth_m
         raise HTTPException(status_code=401, detail="Invalid token")
     user_id = token.get("sub", "")
     result = await invoice_workflow.create_invoice_from_job(
-        user_id=user_id,
-        job_id=req.job_id,
-        line_items=req.line_items,
-        due_days=req.due_days,
+        user_id=user_id, job_id=req.job_id, line_items=req.line_items, due_days=req.due_days,
     )
     return {"success": result.success, "data": result.data, "errors": result.errors}
 
@@ -175,11 +180,7 @@ async def get_daily_schedule(date: str, token: dict = Depends(auth_manager.verif
 
 
 @app.get("/api/workflows/optimize-route/{date}")
-async def optimize_route(
-    date: str,
-    starting_location: str,
-    token: dict = Depends(auth_manager.verify_token),
-):
+async def optimize_route(date: str, starting_location: str, token: dict = Depends(auth_manager.verify_token)):
     if not token:
         raise HTTPException(status_code=401, detail="Invalid token")
     user_id = token.get("sub", "")

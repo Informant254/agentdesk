@@ -1,7 +1,9 @@
 """Authentication and JWT token management."""
 
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
+import httpx
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
@@ -44,6 +46,26 @@ class AuthManager:
         if payload is None:
             return None
         return payload.get("sub")
+
+    async def verify_supabase_token(self, token: str) -> Optional[dict]:
+        """Verify a Supabase access token and return the user data."""
+        if not settings.supabase_url or not settings.supabase_key:
+            return None
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"{settings.supabase_url}/auth/v1/user",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "apikey": settings.supabase_key,
+                    },
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+                return None
+        except Exception:
+            return None
 
 
 auth_manager = AuthManager()
