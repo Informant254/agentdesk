@@ -1,9 +1,8 @@
 """Main agent graph — supervisor pattern routing to specialized sub-agents."""
 
-from typing import Annotated, Any, Sequence, Literal
+from typing import Annotated, Any, Sequence
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langchain_anthropic import ChatAnthropic
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
@@ -18,8 +17,6 @@ from backend.agent.followup import create_followup_agent
 
 
 class AgentState(TypedDict):
-    """State of the agent during workflow execution."""
-
     messages: Annotated[Sequence[BaseMessage], add_messages]
     user_id: str
     context: dict[str, Any]
@@ -41,51 +38,72 @@ You have specialized sub-agents you can hand off to:
 
 ## How to decide
 
-Analyze the user's message and set `current_step` to the appropriate specialist:
-
 - "Schedule", "book", "appointment", "calendar", "available", "reschedule" → scheduling or booking
 - "Assign", "dispatch", "send someone", "which tech", "emergency" → dispatch
 - "Invoice", "bill", "payment", "charge", "receipt", "overdue" → invoicing
 - "Route", "drive time", "optimize stops", "best path", "directions" → route_optimization
 - "Review", "follow up", "remind", "check in", "maintenance" → customer_followup
 
-## Rules
-
-- If the task needs only one specialist, set current_step to that specialist's name.
-- If the task needs multiple steps, start with the first one.
-- If you have enough information to answer directly, set current_step to "finish".
-- Never do specialist work yourself — always delegate.
+If you have enough information to answer directly, set current_step to "finish".
+Never do specialist work yourself — always delegate.
 
 Available values for current_step: scheduling, booking, dispatch, invoicing, route_optimization, customer_followup, finish"""
 
 
+def _make_llm(api_key: str | None = None, provider: str = "anthropic", model_name: str | None = None):
+    """Create the best available LLM using the provided key or server defaults."""
+    anthropic_key = api_key if provider == "anthropic" else None
+    openai_key = api_key if provider == "openai" else None
+
+    # Fall back to server env vars if no user key for this provider
+    if not anthropic_key:
+        anthropic_key = settings.anthropic_api_key or None
+    if not openai_key:
+        import os
+        openai_key = os.environ.get("OPENAI_API_KEY") or None
+
+    if anthropic_key:
+        from langchain_anthropic import ChatAnthropic
+        return ChatAnthropic(
+            model=model_name or settings.default_model,
+            api_key=anthropic_key,
+        )
+
+    if openai_key:
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            model=model_name or "gpt-4o-mini",
+            api_key=openai_key,
+        )
+
+    raise ValueError(
+        "No AI provider key available. "
+        "Please add an Anthropic or OpenAI API key in the AI Providers section."
+    )
+
+
 def _route_next(state: AgentState) -> str:
-    """Determine which node to go to next based on current_step."""
     if state.get("current_step") == "finish":
         return END
     step = state.get("current_step", "")
-    if step in (
-        "scheduling", "booking", "dispatch", "invoicing",
-        "route_optimization", "customer_followup",
-    ):
+    if step in ("scheduling", "booking", "dispatch", "invoicing", "route_optimization", "customer_followup"):
         return step
     return END
 
 
 def _finish(state: AgentState) -> dict[str, Any]:
-    """Return final response from collected_data."""
     collected = state.get("collected_data", {})
     return {"messages": [SystemMessage(content=collected.get("result", "Task completed."))]}
 
 
-def create_agent(model_name: str | None = None):
-    """Create the main agent graph with supervisor + sub-agents."""
-    model = ChatAnthropic(
-        model=model_name or settings.default_model,
-        api_key=settings.anthropic_api_key,
-    )
+def create_agent(
+    model_name: str | None = None,
+    api_key: str | None = None,
+    provider: str = "anthropic",
+):
+    """Create the main agent graph. api_key overrides the server's env key."""
+    model = _make_llm(api_key=api_key, provider=provider, model_name=model_name)
 
-    # Create sub-agents
     scheduling_agent = create_scheduling_agent(model_name)
     booking_agent = create_booking_agent(model_name)
     dispatch_agent = create_dispatch_agent(model_name)
@@ -94,26 +112,18 @@ def create_agent(model_name: str | None = None):
     followup_agent = create_followup_agent(model_name)
 
     def supervisor_node(state: AgentState) -> dict[str, Any]:
-        """Supervisor decides which specialist to route to."""
         messages = [SystemMessage(content=SUPERVISOR_PROMPT)] + list(state["messages"])
         response = model.invoke(messages)
-
         content = response.content.lower()
         next_step = "finish"
         for step in ["scheduling", "booking", "dispatch", "invoicing", "route_optimization", "customer_followup"]:
             if step in content:
                 next_step = step
                 break
-
-        return {
-            "messages": [response],
-            "current_step": next_step,
-        }
+        return {"messages": [response], "current_step": next_step}
 
     def make_sub_agent_node(agent, step_name):
-        """Create a node function that runs a sub-agent and returns collected_data."""
         async def sub_agent_node(state: AgentState) -> dict[str, Any]:
-            # Run the sub-agent with the user's message
             user_msg = state["messages"][-1].content if state["messages"] else ""
             sub_result = await agent.ainvoke({
                 "messages": [HumanMessage(content=user_msg)],
@@ -122,42 +132,29 @@ def create_agent(model_name: str | None = None):
                 "result": None,
                 "complete": False,
             })
-
-            # Extract the final response from the sub-agent
             final_msg = sub_result["messages"][-1] if sub_result["messages"] else "Done."
             result_text = final_msg.content if hasattr(final_msg, "content") else str(final_msg)
-
             collected = state.get("collected_data", {})
             collected["result"] = result_text
             collected[step_name] = result_text
-
-            return {
-                "collected_data": collected,
-                "current_step": "finish",  # After sub-agent completes, go to finish
-            }
-
+            return {"collected_data": collected, "current_step": "finish"}
         sub_agent_node.__name__ = f"{step_name}_node"
         return sub_agent_node
 
-    # Build graph
     workflow = StateGraph(AgentState)
-
-    # Add supervisor
     workflow.add_node("supervisor", supervisor_node)
     workflow.add_node("finish", _finish)
+    for name, agent in [
+        ("scheduling", scheduling_agent),
+        ("booking", booking_agent),
+        ("dispatch", dispatch_agent),
+        ("invoicing", invoicing_agent),
+        ("route_optimization", route_agent),
+        ("customer_followup", followup_agent),
+    ]:
+        workflow.add_node(name, make_sub_agent_node(agent, name))
 
-    # Add sub-agent nodes
-    workflow.add_node("scheduling", make_sub_agent_node(scheduling_agent, "scheduling"))
-    workflow.add_node("booking", make_sub_agent_node(booking_agent, "booking"))
-    workflow.add_node("dispatch", make_sub_agent_node(dispatch_agent, "dispatch"))
-    workflow.add_node("invoicing", make_sub_agent_node(invoicing_agent, "invoicing"))
-    workflow.add_node("route_optimization", make_sub_agent_node(route_agent, "route_optimization"))
-    workflow.add_node("customer_followup", make_sub_agent_node(followup_agent, "customer_followup"))
-
-    # Entry point
     workflow.set_entry_point("supervisor")
-
-    # Supervisor routes to sub-agents or finish
     workflow.add_conditional_edges(
         "supervisor",
         _route_next,
@@ -171,11 +168,8 @@ def create_agent(model_name: str | None = None):
             END: END,
         },
     )
-
-    # All sub-agents go to finish
     for step in ["scheduling", "booking", "dispatch", "invoicing", "route_optimization", "customer_followup"]:
         workflow.add_edge(step, "finish")
-
     workflow.add_edge("finish", END)
 
     return workflow.compile()
@@ -185,10 +179,11 @@ async def run_agent(
     user_message: str,
     user_id: str,
     context: dict[str, Any] | None = None,
+    api_key: str | None = None,
+    provider: str = "anthropic",
 ) -> dict[str, Any]:
-    """Run the agent with a user message."""
-    agent = create_agent()
-
+    """Run the agent. api_key + provider select which LLM to use."""
+    agent = create_agent(api_key=api_key, provider=provider)
     initial_state: AgentState = {
         "messages": [HumanMessage(content=user_message)],
         "user_id": user_id,
@@ -197,6 +192,4 @@ async def run_agent(
         "errors": [],
         "collected_data": {},
     }
-
-    result = await agent.ainvoke(initial_state)
-    return result
+    return await agent.ainvoke(initial_state)
