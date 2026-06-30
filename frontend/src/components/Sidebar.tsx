@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import {
   MessageSquare,
   Calendar,
@@ -16,7 +17,7 @@ interface SidebarProps {
   onNavigate: (panel: Panel) => void;
 }
 
-const navItems: { id: Panel; label: string; icon: React.ReactNode; badge?: string }[] = [
+const navItems: { id: Panel; label: string; icon: ReactNode; badge?: string }[] = [
   { id: "chat", label: "AI Assistant", icon: <MessageSquare size={20} /> },
   { id: "opencode", label: "OpenCode Terminal", icon: <Terminal size={20} />, badge: "NEW" },
   { id: "schedule", label: "Schedule", icon: <Calendar size={20} /> },
