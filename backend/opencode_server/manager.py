@@ -10,9 +10,9 @@ from typing import Any
 
 from backend.config import settings
 
-_BASE_PORT = 4097          # Avoid clash with the default 4096
+_BASE_PORT = 4097
 _MAX_USERS = 50
-_IDLE_TIMEOUT_SECONDS = 30 * 60  # 30 minutes
+_IDLE_TIMEOUT_SECONDS = 30 * 60
 
 
 class UserOpenCodeProcess:
@@ -45,23 +45,40 @@ class UserOpenCodeProcess:
 
 def _find_opencode_binary(env: dict[str, str]) -> str | None:
     """Locate the opencode binary, checking PATH and known install locations."""
-    # 1. Check PATH from the environment
     found = shutil.which("opencode", path=env.get("PATH", ""))
     if found:
         return found
-
-    # 2. Try common install locations based on $HOME
     home = env.get("HOME") or os.path.expanduser("~")
     candidates = [
         os.path.join(home, ".opencode", "bin", "opencode"),
         os.path.join(home, ".local", "bin", "opencode"),
         "/usr/local/bin/opencode",
         "/usr/bin/opencode",
+        "/opt/render/project/.opencode/bin/opencode",
     ]
     for path in candidates:
         if os.path.isfile(path) and os.access(path, os.X_OK):
             return path
+    return None
 
+
+async def _install_opencode_runtime(env: dict[str, str]) -> str | None:
+    """Install opencode at runtime if the build didn't do it. Returns binary path or None."""
+    home = env.get("HOME") or os.path.expanduser("~")
+    install_dir = os.path.join(home, ".opencode", "bin")
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            "curl -fsSL https://opencode.ai/install | bash",
+            env={**env, "HOME": home},
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=120)
+    except Exception:
+        pass
+    binary = os.path.join(install_dir, "opencode")
+    if os.path.isfile(binary) and os.access(binary, os.X_OK):
+        return binary
     return None
 
 
@@ -84,6 +101,17 @@ class OpenCodeManager:
     def get_provider_keys(self, user_id: str) -> dict[str, str]:
         return self._user_providers.get(user_id, {})
 
+    def get_decrypted_keys(self, user_id: str) -> dict[str, str]:
+        """Return a dict of provider → plaintext API key for the given user."""
+        from backend.security.encryption import decrypt_data
+        result: dict[str, str] = {}
+        for provider, encrypted in self._user_providers.get(user_id, {}).items():
+            try:
+                result[provider] = decrypt_data(encrypted)
+            except Exception:
+                pass
+        return result
+
     def delete_provider_key(self, user_id: str, provider: str):
         self._user_providers.get(user_id, {}).pop(provider, None)
 
@@ -94,19 +122,12 @@ class OpenCodeManager:
 
     def _env_for_user(self, user_id: str) -> dict[str, str]:
         from backend.security.encryption import decrypt_data
-
         env = os.environ.copy()
-
-        # Ensure $HOME/.opencode/bin is always in PATH regardless of how the
-        # process was started (Render may or may not inherit the export).
         home = env.get("HOME") or os.path.expanduser("~")
         opencode_bin_dir = os.path.join(home, ".opencode", "bin")
         local_bin_dir = os.path.join(home, ".local", "bin")
         current_path = env.get("PATH", "")
-        extra = ":".join(
-            d for d in [opencode_bin_dir, local_bin_dir]
-            if d not in current_path
-        )
+        extra = ":".join(d for d in [opencode_bin_dir, local_bin_dir] if d not in current_path)
         if extra:
             env["PATH"] = f"{extra}:{current_path}"
 
@@ -136,19 +157,15 @@ class OpenCodeManager:
 
     async def get_or_start(self, user_id: str) -> dict[str, Any]:
         await self._cleanup_idle()
-
         async with self._lock:
             instance = self._instances.get(user_id)
-
             if instance and instance.is_running():
                 instance.touch()
                 return {"status": "running", "port": instance.port, "url": instance.url, "user_id": user_id}
 
-            # Allocate port
             if not self._port_pool:
                 return {"status": "failed", "error": "No available ports (server at capacity)"}
 
-            # Reuse existing slot or take new port
             if instance and not instance.is_running() and instance.port in self._port_pool:
                 port = instance.port
                 self._port_pool.remove(port)
@@ -158,24 +175,24 @@ class OpenCodeManager:
             inst = UserOpenCodeProcess(user_id, port)
             env = self._env_for_user(user_id)
 
-            # Working directory = project root (where opencode.json lives)
             working_dir = os.path.dirname(
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             )
 
             app_url = getattr(settings, "app_url", None) or "https://agentdesk-v2.netlify.app"
 
-            # Resolve the absolute path of the binary to avoid PATH lookup
-            # failures in subprocess environments (Render, Docker, etc.)
             opencode_bin = _find_opencode_binary(env)
+            if not opencode_bin:
+                # Try installing at runtime (build may have failed silently)
+                opencode_bin = await _install_opencode_runtime(env)
+
             if not opencode_bin:
                 self._port_pool.append(port)
                 return {
                     "status": "failed",
                     "error": (
-                        "OpenCode binary not found. "
-                        "Checked PATH and ~/.opencode/bin. "
-                        "Run: curl -fsSL https://opencode.ai/install | bash"
+                        "OpenCode binary not found and runtime install failed. "
+                        "The server may not have internet access during startup."
                     ),
                 }
 
@@ -193,7 +210,6 @@ class OpenCodeManager:
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 )
                 await asyncio.sleep(2)
-
                 if inst.process.poll() is not None:
                     stderr = inst.process.stderr.read().decode() if inst.process.stderr else ""
                     stdout = inst.process.stdout.read().decode() if inst.process.stdout else ""
@@ -202,20 +218,15 @@ class OpenCodeManager:
                         "status": "failed",
                         "error": stderr or stdout or "OpenCode process exited unexpectedly",
                     }
-
                 self._instances[user_id] = inst
                 return {
                     "status": "started", "port": port,
                     "url": inst.url, "user_id": user_id,
                     "pid": inst.process.pid,
                 }
-
             except FileNotFoundError:
                 self._port_pool.append(port)
-                return {
-                    "status": "failed",
-                    "error": f"OpenCode binary not executable at: {opencode_bin}",
-                }
+                return {"status": "failed", "error": f"OpenCode binary not executable: {opencode_bin}"}
             except Exception as e:
                 self._port_pool.append(port)
                 return {"status": "failed", "error": str(e)}
