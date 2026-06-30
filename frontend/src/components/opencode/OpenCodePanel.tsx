@@ -4,19 +4,24 @@ import { useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 
 const OpenCodeTerminal = dynamic(
-  () => import("./OpenCodeTerminal").then((m) => m.OpenCodeTerminal),
+  () => import("./OpenCodeTerminal").then(m => m.OpenCodeTerminal),
   { ssr: false }
 );
 
 const OpenCodeSessionManager = dynamic(
-  () => import("./OpenCodeTerminal").then((m) => m.OpenCodeSessionManager),
+  () => import("./OpenCodeTerminal").then(m => m.OpenCodeSessionManager),
   { ssr: false }
 );
 
 type View = "sessions" | "terminal";
 
-export function OpenCodePanel() {
-  const [view, setView] = useState<View>("sessions");
+interface OpenCodePanelProps {
+  authToken: string | null;
+  onOpenProviders?: () => void;
+}
+
+export function OpenCodePanel({ authToken, onOpenProviders }: OpenCodePanelProps) {
+  const [view,            setView]            = useState<View>("sessions");
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 
   const handleSessionSelect = useCallback((sessionId: string) => {
@@ -24,9 +29,7 @@ export function OpenCodePanel() {
     setView("terminal");
   }, []);
 
-  const handleBack = useCallback(() => {
-    setView("sessions");
-  }, []);
+  const handleBack = useCallback(() => setView("sessions"), []);
 
   if (view === "terminal" && activeSessionId) {
     return (
@@ -34,7 +37,7 @@ export function OpenCodePanel() {
         <div className="flex items-center gap-3 px-4 py-2 bg-[#161b22] border-b border-[#30363d]">
           <button
             onClick={handleBack}
-            className="text-[#8b949e] hover:text-white text-sm"
+            className="text-[#8b949e] hover:text-white text-sm transition-colors"
           >
             ← Sessions
           </button>
@@ -42,11 +45,21 @@ export function OpenCodePanel() {
           <span className="text-white text-sm font-medium">OpenCode Terminal</span>
         </div>
         <div className="flex-1 min-h-0">
-          <OpenCodeTerminal sessionId={activeSessionId} />
+          <OpenCodeTerminal
+            sessionId={activeSessionId}
+            authToken={authToken}
+            onOpenProviders={onOpenProviders}
+          />
         </div>
       </div>
     );
   }
 
-  return <OpenCodeSessionManager onSessionSelect={handleSessionSelect} />;
+  return (
+    <OpenCodeSessionManager
+      authToken={authToken}
+      onSessionSelect={handleSessionSelect}
+      onOpenProviders={onOpenProviders}
+    />
+  );
 }

@@ -1,31 +1,43 @@
 {
-  "mcpServers": {
+  "$schema": "https://opencode.ai/config.json",
+  "autoupdate": false,
+  "server": {
+    "port": 4096,
+    "hostname": "127.0.0.1"
+  },
+  "permission": {
+    "bash": "ask",
+    "edit": "ask",
+    "write": "ask",
+    "websearch": "allow",
+    "webfetch": "allow",
+    "read": "allow"
+  },
+  "mcp": {
     "agentdesk-calendar": {
+      "type": "local",
       "command": "python",
       "args": ["-m", "backend.mcp_servers.google_calendar"],
       "env": {
-        "GOOGLE_CALENDAR_CLIENT_ID": "",
-        "GOOGLE_CALENDAR_CLIENT_SECRET": ""
+        "GOOGLE_CALENDAR_CLIENT_ID": "${GOOGLE_CALENDAR_CLIENT_ID}",
+        "GOOGLE_CALENDAR_CLIENT_SECRET": "${GOOGLE_CALENDAR_CLIENT_SECRET}"
       }
     },
     "agentdesk-maps": {
+      "type": "local",
       "command": "python",
       "args": ["-m", "backend.mcp_servers.google_maps"],
       "env": {
-        "GOOGLE_MAPS_API_KEY": ""
+        "GOOGLE_MAPS_API_KEY": "${GOOGLE_MAPS_API_KEY}"
       }
     },
     "agentdesk-jobber": {
+      "type": "local",
       "command": "python",
       "args": ["-m", "backend.mcp_servers.jobber"],
       "env": {
-        "JOBBER_API_KEY": ""
+        "JOBBER_API_KEY": "${JOBBER_API_KEY}"
       }
-    }
-  },
-  "provider": {
-    "anthropic": {
-      "api_key": ""
     }
   }
 }

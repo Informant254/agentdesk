@@ -1,71 +1,64 @@
-"""Authentication and JWT token management."""
-
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+"""Authentication manager — JWT creation and verification."""
 
 import httpx
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
+from fastapi import Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from backend.config import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_bearer = HTTPBearer(auto_error=False)
 
 
 class AuthManager:
-    """Handle JWT token creation, validation, and user authentication."""
-
-    def __init__(self):
-        self.secret_key = settings.jwt_secret
-        self.algorithm = settings.jwt_algorithm
-        self.expire_minutes = settings.access_token_expire_minutes
-
     def hash_password(self, password: str) -> str:
-        return pwd_context.hash(password)
+        return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
-    def verify_password(self, plain_password: str, hashed_password: str) -> bool:
-        return pwd_context.verify(plain_password, hashed_password)
+    def verify_password(self, password: str, hashed: str) -> bool:
+        return bcrypt.checkpw(password.encode(), hashed.encode())
 
-    def create_access_token(self, user_id: str, extra_claims: dict | None = None) -> str:
-        to_encode = {"sub": user_id, "iat": datetime.now(timezone.utc)}
-        if extra_claims:
-            to_encode.update(extra_claims)
-        expire = datetime.now(timezone.utc) + timedelta(minutes=self.expire_minutes)
-        to_encode["exp"] = expire
-        return jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
+    def create_access_token(self, user_id: str, extra: dict | None = None) -> str:
+        payload = {
+            "sub": user_id,
+            "exp": datetime.now(timezone.utc) + timedelta(days=7),
+            **(extra or {}),
+        }
+        return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 
-    def verify_token(self, token: str) -> dict | None:
+    def verify_token_raw(self, token: str) -> dict | None:
+        """Decode a JWT and return the payload, or None on failure."""
         try:
-            payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
-            return payload
+            return jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
         except JWTError:
             return None
 
-    def get_user_id_from_token(self, token: str) -> str | None:
-        payload = self.verify_token(token)
-        if payload is None:
+    def verify_token(
+        self,
+        credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    ) -> dict | None:
+        if not credentials:
             return None
-        return payload.get("sub")
+        return self.verify_token_raw(credentials.credentials)
 
-    async def verify_supabase_token(self, token: str) -> Optional[dict]:
-        """Verify a Supabase access token and return the user data."""
-        if not settings.supabase_url or not settings.supabase_key:
-            return None
+    async def verify_supabase_token(self, supabase_token: str) -> dict | None:
+        """Verify a Supabase JWT by calling the Supabase user endpoint."""
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
                     f"{settings.supabase_url}/auth/v1/user",
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "apikey": settings.supabase_key,
-                    },
-                    timeout=10.0,
+                    headers={"Authorization": f"Bearer {supabase_token}",
+                             "apikey": settings.supabase_key},
+                    timeout=10,
                 )
                 if resp.status_code == 200:
                     return resp.json()
-                return None
         except Exception:
-            return None
+            pass
+        return None
 
 
 auth_manager = AuthManager()
