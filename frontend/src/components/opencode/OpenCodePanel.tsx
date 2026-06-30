@@ -1,7 +1,17 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { OpenCodeTerminal, OpenCodeSessionManager } from "./OpenCodeTerminal";
+import dynamic from "next/dynamic";
+
+const OpenCodeTerminal = dynamic(
+  () => import("./OpenCodeTerminal").then((m) => m.OpenCodeTerminal),
+  { ssr: false }
+);
+
+const OpenCodeSessionManager = dynamic(
+  () => import("./OpenCodeTerminal").then((m) => m.OpenCodeSessionManager),
+  { ssr: false }
+);
 
 type View = "sessions" | "terminal";
 
@@ -21,7 +31,6 @@ export function OpenCodePanel() {
   if (view === "terminal" && activeSessionId) {
     return (
       <div className="flex flex-col h-full">
-        {/* Header with back button */}
         <div className="flex items-center gap-3 px-4 py-2 bg-[#161b22] border-b border-[#30363d]">
           <button
             onClick={handleBack}
@@ -32,8 +41,6 @@ export function OpenCodePanel() {
           <span className="text-[#30363d]">|</span>
           <span className="text-white text-sm font-medium">OpenCode Terminal</span>
         </div>
-
-        {/* Terminal */}
         <div className="flex-1 min-h-0">
           <OpenCodeTerminal sessionId={activeSessionId} />
         </div>
