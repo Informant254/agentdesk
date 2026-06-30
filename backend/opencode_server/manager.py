@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import shutil
 import signal
 import subprocess
 import time
@@ -42,6 +43,28 @@ class UserOpenCodeProcess:
         self.process = None
 
 
+def _find_opencode_binary(env: dict[str, str]) -> str | None:
+    """Locate the opencode binary, checking PATH and known install locations."""
+    # 1. Check PATH from the environment
+    found = shutil.which("opencode", path=env.get("PATH", ""))
+    if found:
+        return found
+
+    # 2. Try common install locations based on $HOME
+    home = env.get("HOME") or os.path.expanduser("~")
+    candidates = [
+        os.path.join(home, ".opencode", "bin", "opencode"),
+        os.path.join(home, ".local", "bin", "opencode"),
+        "/usr/local/bin/opencode",
+        "/usr/bin/opencode",
+    ]
+    for path in candidates:
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+
+    return None
+
+
 class OpenCodeManager:
     """Manage per-user OpenCode server processes."""
 
@@ -73,6 +96,20 @@ class OpenCodeManager:
         from backend.security.encryption import decrypt_data
 
         env = os.environ.copy()
+
+        # Ensure $HOME/.opencode/bin is always in PATH regardless of how the
+        # process was started (Render may or may not inherit the export).
+        home = env.get("HOME") or os.path.expanduser("~")
+        opencode_bin_dir = os.path.join(home, ".opencode", "bin")
+        local_bin_dir = os.path.join(home, ".local", "bin")
+        current_path = env.get("PATH", "")
+        extra = ":".join(
+            d for d in [opencode_bin_dir, local_bin_dir]
+            if d not in current_path
+        )
+        if extra:
+            env["PATH"] = f"{extra}:{current_path}"
+
         provider_env_map = {
             "anthropic":  "ANTHROPIC_API_KEY",
             "openai":     "OPENAI_API_KEY",
@@ -121,14 +158,29 @@ class OpenCodeManager:
             inst = UserOpenCodeProcess(user_id, port)
             env = self._env_for_user(user_id)
 
-            # Working directory = project root (where AGENTS.md lives)
+            # Working directory = project root (where opencode.json lives)
             working_dir = os.path.dirname(
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             )
 
             app_url = getattr(settings, "app_url", None) or "https://agentdesk-v2.netlify.app"
+
+            # Resolve the absolute path of the binary to avoid PATH lookup
+            # failures in subprocess environments (Render, Docker, etc.)
+            opencode_bin = _find_opencode_binary(env)
+            if not opencode_bin:
+                self._port_pool.append(port)
+                return {
+                    "status": "failed",
+                    "error": (
+                        "OpenCode binary not found. "
+                        "Checked PATH and ~/.opencode/bin. "
+                        "Run: curl -fsSL https://opencode.ai/install | bash"
+                    ),
+                }
+
             cmd = [
-                "opencode", "serve",
+                opencode_bin, "serve",
                 "--port", str(port),
                 "--hostname", inst.hostname,
                 "--cors", app_url,
@@ -144,8 +196,12 @@ class OpenCodeManager:
 
                 if inst.process.poll() is not None:
                     stderr = inst.process.stderr.read().decode() if inst.process.stderr else ""
+                    stdout = inst.process.stdout.read().decode() if inst.process.stdout else ""
                     self._port_pool.append(port)
-                    return {"status": "failed", "error": stderr or "Process exited unexpectedly"}
+                    return {
+                        "status": "failed",
+                        "error": stderr or stdout or "OpenCode process exited unexpectedly",
+                    }
 
                 self._instances[user_id] = inst
                 return {
@@ -158,7 +214,7 @@ class OpenCodeManager:
                 self._port_pool.append(port)
                 return {
                     "status": "failed",
-                    "error": "OpenCode binary not found. Run: curl -fsSL https://opencode.ai/install | bash",
+                    "error": f"OpenCode binary not executable at: {opencode_bin}",
                 }
             except Exception as e:
                 self._port_pool.append(port)
