@@ -17,6 +17,19 @@ interface ProvidersPanelProps {
   authToken: string | null;
 }
 
+async function parseError(res: Response, fallback: string): Promise<string> {
+  try {
+    const body = await res.json() as { detail?: string };
+    return body.detail || fallback;
+  } catch {
+    try {
+      const text = await res.text();
+      if (text && text.length < 200) return text;
+    } catch { /* ignore */ }
+    return `${fallback} (${res.status})`;
+  }
+}
+
 export function ProvidersPanel({ authToken }: ProvidersPanelProps) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,11 +48,13 @@ export function ProvidersPanel({ authToken }: ProvidersPanelProps) {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       if (res.ok) {
-        const data = await res.json();
+        const data = await res.json() as { providers: Provider[] };
         setProviders(data.providers);
+      } else {
+        setError(await parseError(res, "Failed to load providers"));
       }
     } catch {
-      setError("Failed to load providers");
+      setError("Could not reach the server — check your connection");
     } finally {
       setLoading(false);
     }
@@ -69,11 +84,10 @@ export function ProvidersPanel({ authToken }: ProvidersPanelProps) {
         await fetchProviders();
         setTimeout(() => setSuccess(null), 3000);
       } else {
-        const err = await res.json();
-        setError(err.detail || "Failed to save key");
+        setError(await parseError(res, "Failed to save key"));
       }
     } catch {
-      setError("Network error — please try again");
+      setError("Could not reach the server — please check your connection and try again");
     } finally {
       setSaving(false);
     }
@@ -92,9 +106,11 @@ export function ProvidersPanel({ authToken }: ProvidersPanelProps) {
         setSuccess(`${providerName} disconnected`);
         await fetchProviders();
         setTimeout(() => setSuccess(null), 3000);
+      } else {
+        setError(await parseError(res, "Failed to remove key"));
       }
     } catch {
-      setError("Failed to remove key");
+      setError("Could not reach the server — please try again");
     } finally {
       setDeleting(null);
     }
@@ -105,7 +121,6 @@ export function ProvidersPanel({ authToken }: ProvidersPanelProps) {
 
   return (
     <div className="flex-1 overflow-y-auto bg-[#0d1117] text-[#c9d1d9] p-6">
-      {/* Header */}
       <div className="max-w-2xl mx-auto">
         <div className="flex items-center gap-3 mb-2">
           <div className="p-2 bg-[#1c2128] rounded-lg">
@@ -117,7 +132,6 @@ export function ProvidersPanel({ authToken }: ProvidersPanelProps) {
           </div>
         </div>
 
-        {/* Alerts */}
         {error && (
           <div className="mt-4 p-3 bg-[#3d1f1f] border border-[#f85149] rounded-lg text-[#f85149] text-sm">
             {error}
@@ -135,7 +149,6 @@ export function ProvidersPanel({ authToken }: ProvidersPanelProps) {
           </div>
         ) : (
           <>
-            {/* Connected providers */}
             {connected.length > 0 && (
               <div className="mt-6">
                 <h2 className="text-xs font-semibold uppercase tracking-wider text-[#8b949e] mb-3">
@@ -170,7 +183,6 @@ export function ProvidersPanel({ authToken }: ProvidersPanelProps) {
               </div>
             )}
 
-            {/* Available providers */}
             <div className="mt-6">
               <h2 className="text-xs font-semibold uppercase tracking-wider text-[#8b949e] mb-3">
                 Available providers
@@ -178,7 +190,6 @@ export function ProvidersPanel({ authToken }: ProvidersPanelProps) {
               <div className="space-y-2">
                 {available.map(provider => (
                   <div key={provider.id} className="bg-[#161b22] border border-[#30363d] rounded-lg overflow-hidden">
-                    {/* Provider row */}
                     <div className="flex items-center justify-between p-4">
                       <div className="flex items-center gap-3">
                         <Circle size={18} className="text-[#484f58]" />
@@ -211,11 +222,10 @@ export function ProvidersPanel({ authToken }: ProvidersPanelProps) {
                       </div>
                     </div>
 
-                    {/* Expand: key input */}
                     {addingFor === provider.id && (
                       <div className="px-4 pb-4 border-t border-[#30363d] pt-3">
                         <p className="text-xs text-[#8b949e] mb-2">
-                          Paste your API key below. It's encrypted before storage and never logged.
+                          Paste your API key below. It&apos;s encrypted before storage and never logged.
                         </p>
                         <div className="flex gap-2">
                           <div className="relative flex-1">
@@ -252,12 +262,11 @@ export function ProvidersPanel({ authToken }: ProvidersPanelProps) {
               </div>
             </div>
 
-            {/* Info box */}
             <div className="mt-6 p-4 bg-[#161b22] border border-[#30363d] rounded-lg">
               <p className="text-xs text-[#8b949e] leading-relaxed">
                 <span className="text-[#58a6ff] font-medium">How it works: </span>
                 Your API keys are encrypted with Fernet (AES-128) and injected directly into your personal
-                OpenCode server instance as environment variables. They're never sent to third parties or
+                OpenCode server instance as environment variables. They&apos;re never sent to third parties or
                 logged. Each user gets an isolated OpenCode process — your keys only run inside yours.
               </p>
             </div>
