@@ -97,9 +97,9 @@ async def social_auth(req: SocialAuthRequest):
 _CHAT_PROVIDER_PRIORITY = ["anthropic", "openai", "google", "gemini", "groq", "mistral"]
 
 
-def _pick_chat_key(user_id: str) -> tuple[str | None, str]:
+async def _pick_chat_key(user_id: str) -> tuple[str | None, str]:
     """Return (api_key, provider) for the best available key for this user."""
-    decrypted = opencode_manager.get_decrypted_keys(user_id)
+    decrypted = await opencode_manager.get_decrypted_keys(user_id)
     for provider in _CHAT_PROVIDER_PRIORITY:
         if provider in decrypted and decrypted[provider]:
             return decrypted[provider], provider
@@ -126,7 +126,7 @@ async def chat(req: ChatRequest, token: dict = Depends(auth_manager.verify_token
         raise HTTPException(status_code=401, detail="Invalid token")
     user_id = token.get("sub", "")
 
-    api_key, provider = _pick_chat_key(user_id)
+    api_key, provider = await _pick_chat_key(user_id)
     if not api_key:
         raise HTTPException(
             status_code=400,
