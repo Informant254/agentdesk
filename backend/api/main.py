@@ -1,5 +1,9 @@
 """FastAPI application for AgentDesk backend."""
 
+from datetime import datetime
+from typing import Any
+import uuid
+
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -12,6 +16,7 @@ from backend.security.audit import audit_logger
 from backend.opencode_server.websocket_proxy import router as opencode_router
 from backend.opencode_server.manager import opencode_manager
 from backend.api.route_map import router as route_map_router
+from backend.db import get_jobs_for_date, get_all_jobs, create_job, get_invoices, create_invoice_record
 
 app = FastAPI(
     title="AgentDesk API",
@@ -35,8 +40,6 @@ app.add_middleware(
 )
 
 app.include_router(opencode_router)
-
-# Include Route Map routes
 app.include_router(route_map_router)
 
 
@@ -97,7 +100,6 @@ async def social_auth(req: SocialAuthRequest):
 
 # ── Chat ──────────────────────────────────────────────────────────────────────
 
-# Priority order for picking which user key to use in the chat agent
 _CHAT_PROVIDER_PRIORITY = ["anthropic", "openai", "google", "gemini", "groq", "mistral"]
 
 
@@ -107,7 +109,6 @@ async def _pick_chat_key(user_id: str) -> tuple[str | None, str]:
     for provider in _CHAT_PROVIDER_PRIORITY:
         if provider in decrypted and decrypted[provider]:
             return decrypted[provider], provider
-    # Fall back to server-side anthropic key
     if settings.anthropic_api_key:
         return settings.anthropic_api_key, "anthropic"
     return None, "anthropic"
@@ -142,13 +143,7 @@ async def chat(req: ChatRequest, token: dict = Depends(auth_manager.verify_token
         )
 
     try:
-        result = await run_agent(
-            req.message,
-            user_id,
-            req.context,
-            api_key=api_key,
-            provider=provider,
-        )
+        result = await run_agent(req.message, user_id, req.context, api_key=api_key, provider=provider)
         collected = result.get("collected_data", {})
         final_response = collected.get("result", "")
         if not final_response and result.get("messages"):
@@ -162,22 +157,129 @@ async def chat(req: ChatRequest, token: dict = Depends(auth_manager.verify_token
         })
         return ChatResponse(response=final_response, actions_taken=actions, provider_used=provider)
     except ValueError as e:
-        # Raised by _make_llm when no key is available
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Workflows ─────────────────────────────────────────────────────────────────
+# ── Jobs (direct DB — no LLM) ─────────────────────────────────────────────────
 
 
 class BookJobRequest(BaseModel):
     client_name: str
     job_title: str
     job_address: str
-    start_time: str
-    end_time: str
+    scheduled_at: str          # ISO-8601, e.g. "2026-07-01T09:00:00Z"
+    estimated_duration_minutes: int = 60
     description: str = ""
+    status: str = "scheduled"
+
+
+@app.get("/api/jobs/schedule")
+async def get_schedule(date: str, token: dict = Depends(auth_manager.verify_token)):
+    """Return all jobs for a specific date directly from the database."""
+    if not token:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user_id = token.get("sub", "")
+    try:
+        jobs = await get_jobs_for_date(user_id, date)
+        return {"jobs": jobs, "date": date, "total": len(jobs)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+@app.post("/api/jobs/book")
+async def book_job_direct(req: BookJobRequest, token: dict = Depends(auth_manager.verify_token)):
+    """Create a new job directly in the database."""
+    if not token:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user_id = token.get("sub", "")
+    try:
+        job = await create_job(user_id, {
+            "id": str(uuid.uuid4()),
+            "title": req.job_title,
+            "client_name": req.client_name,
+            "address": req.job_address,
+            "scheduled_at": req.scheduled_at,
+            "estimated_duration_minutes": req.estimated_duration_minutes,
+            "description": req.description,
+            "status": req.status,
+        })
+        return {"success": True, "job": job}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+# ── Invoices (direct DB — no LLM) ────────────────────────────────────────────
+
+
+class CreateInvoiceDirectRequest(BaseModel):
+    client_name: str
+    job_title: str
+    amount_cents: int          # amount in cents, e.g. 85000 = $850.00
+    status: str = "draft"     # draft | sent | paid | overdue
+    due_date: str             # YYYY-MM-DD
+    notes: str = ""
+
+
+@app.get("/api/invoices/list")
+async def list_invoices(token: dict = Depends(auth_manager.verify_token)):
+    """Return all invoices for the authenticated user from the database."""
+    if not token:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user_id = token.get("sub", "")
+    try:
+        invoices = await get_invoices(user_id)
+        # Compute summary totals
+        outstanding = sum(i.get("amount_cents", 0) for i in invoices if i.get("status") != "paid")
+        overdue = sum(i.get("amount_cents", 0) for i in invoices if i.get("status") == "overdue")
+        paid_this_month = 0
+        this_month = datetime.utcnow().strftime("%Y-%m")
+        for inv in invoices:
+            if inv.get("status") == "paid" and (inv.get("paid_at") or "").startswith(this_month):
+                paid_this_month += inv.get("amount_cents", 0)
+        return {
+            "invoices": invoices,
+            "summary": {
+                "outstanding_cents": outstanding,
+                "overdue_cents": overdue,
+                "paid_this_month_cents": paid_this_month,
+                "total": len(invoices),
+            },
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+@app.post("/api/invoices/create")
+async def create_invoice_direct(req: CreateInvoiceDirectRequest, token: dict = Depends(auth_manager.verify_token)):
+    """Create a new invoice directly in the database."""
+    if not token:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user_id = token.get("sub", "")
+    try:
+        invoice = await create_invoice_record(user_id, {
+            "id": str(uuid.uuid4()),
+            "client_name": req.client_name,
+            "job_title": req.job_title,
+            "amount_cents": req.amount_cents,
+            "status": req.status,
+            "due_date": req.due_date,
+            "notes": req.notes,
+            "created_at": datetime.utcnow().isoformat() + "Z",
+        })
+        return {"success": True, "invoice": invoice}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+# ── Legacy workflow endpoints (kept for compatibility) ────────────────────────
+
+
+class CreateInvoiceRequest(BaseModel):
+    job_id: str
+    line_items: list[dict]
+    due_days: int = 30
 
 
 @app.post("/api/workflows/book-job")
@@ -187,16 +289,10 @@ async def book_job(req: BookJobRequest, token: dict = Depends(auth_manager.verif
     user_id = token.get("sub", "")
     result = await scheduling_workflow.book_job(
         user_id=user_id, client_name=req.client_name, job_title=req.job_title,
-        job_address=req.job_address, start_time=req.start_time, end_time=req.end_time,
+        job_address=req.job_address, start_time=req.scheduled_at, end_time=req.scheduled_at,
         description=req.description,
     )
     return {"success": result.success, "data": result.data, "errors": result.errors}
-
-
-class CreateInvoiceRequest(BaseModel):
-    job_id: str
-    line_items: list[dict]
-    due_days: int = 30
 
 
 @app.post("/api/workflows/create-invoice")
