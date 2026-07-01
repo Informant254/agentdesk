@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Sidebar } from "./Sidebar";
 import { ChatPanel } from "./ChatPanel";
 import { SchedulePanel } from "./SchedulePanel";
@@ -10,6 +10,7 @@ import dynamic from "next/dynamic";
 import { ProfilePanel } from "./ProfilePanel";
 import { supabase } from "@/lib/supabase";
 import { setAuthToken } from "@/lib/api";
+import { Wifi, WifiOff, Loader2 } from "lucide-react";
 
 const RouteMapPanel = dynamic(
   () => import("./RouteMapPanel").then(m => ({ default: m.RouteMapPanel })),
@@ -19,12 +20,89 @@ const RouteMapPanel = dynamic(
 type Panel = "chat" | "schedule" | "invoices" | "opencode" | "providers" | "profile" | "route-map";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://agentdesk-mzx6.onrender.com";
+const PING_INTERVAL_MS = 8 * 60 * 1000; // 8 minutes — keeps Render from sleeping (15-min timeout)
+const SLOW_THRESHOLD_MS = 3000;          // Show "warming up" banner after 3 s
+
+type ServerState = "unknown" | "warming" | "ready" | "offline";
+
+function useServerWakeUp() {
+  const [serverState, setServerState] = useState<ServerState>("unknown");
+
+  const ping = useCallback(async () => {
+    const start = Date.now();
+    // Show "warming" banner only if first ping takes >3 s
+    const slowTimer = setTimeout(() => setServerState("warming"), SLOW_THRESHOLD_MS);
+    try {
+      const res = await fetch(`${API_URL}/api/health`, { cache: "no-store" });
+      clearTimeout(slowTimer);
+      if (res.ok) {
+        setServerState("ready");
+      } else {
+        setServerState("offline");
+      }
+    } catch {
+      clearTimeout(slowTimer);
+      const elapsed = Date.now() - start;
+      // If it took a while before failing, it's likely waking; retry once
+      if (elapsed > 5000) {
+        try {
+          const retry = await fetch(`${API_URL}/api/health`, { cache: "no-store" });
+          setServerState(retry.ok ? "ready" : "offline");
+        } catch {
+          setServerState("offline");
+        }
+      } else {
+        setServerState("offline");
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    // Wake immediately on mount
+    ping();
+    // Keep alive — ping every 8 minutes so Render never sleeps while the tab is open
+    const interval = setInterval(ping, PING_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [ping]);
+
+  return serverState;
+}
+
+function ServerBanner({ state }: { state: ServerState }) {
+  if (state === "ready" || state === "unknown") return null;
+
+  if (state === "warming") {
+    return (
+      <div className="flex items-center gap-2 px-4 py-2 bg-amber-50 border-b border-amber-200 text-amber-700 text-xs">
+        <Loader2 size={13} className="animate-spin shrink-0" />
+        <span>
+          <strong>Server is warming up</strong> — Render free tier sleeps after 15 min of inactivity.
+          First request takes up to 60 s. Hang tight…
+        </span>
+      </div>
+    );
+  }
+
+  if (state === "offline") {
+    return (
+      <div className="flex items-center gap-2 px-4 py-2 bg-red-50 border-b border-red-200 text-red-700 text-xs">
+        <WifiOff size={13} className="shrink-0" />
+        <span>
+          <strong>Server unreachable</strong> — check your connection or wait a moment and refresh.
+        </span>
+      </div>
+    );
+  }
+
+  return null;
+}
 
 export function Dashboard() {
   const [activePanel,     setActivePanel]     = useState<Panel>("chat");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [checkingAuth,    setCheckingAuth]    = useState(true);
   const [authToken,       setAuthTokenState]  = useState<string | null>(null);
+  const serverState = useServerWakeUp();
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
@@ -36,7 +114,7 @@ export function Dashboard() {
             body: JSON.stringify({ supabase_token: session.access_token }),
           });
           if (res.ok) {
-            const data = await res.json();
+            const data = await res.json() as { access_token: string };
             setAuthToken(data.access_token);
             setAuthTokenState(data.access_token);
           }
@@ -64,28 +142,31 @@ export function Dashboard() {
   }
 
   return (
-    <div className="flex h-screen bg-slate-50">
-      <Sidebar activePanel={activePanel} onNavigate={setActivePanel} />
-      <main className="flex-1 overflow-hidden flex">
-        {activePanel === "chat"      && <ChatPanel />}
-        {activePanel === "opencode"  && (
-          <OpenCodePanel
-            authToken={authToken}
-            onOpenProviders={() => setActivePanel("providers")}
-          />
-        )}
-        {activePanel === "providers" && <ProvidersPanel authToken={authToken} />}
-        {activePanel === "schedule"  && <SchedulePanel />}
-        {activePanel === "invoices"  && <InvoicesPanel />}
-        {activePanel === "route-map" && <RouteMapPanel />}
-        {activePanel === "profile"   && <ProfilePanel />}
-      </main>
+    <div className="flex flex-col h-screen bg-slate-50">
+      <ServerBanner state={serverState} />
+      <div className="flex flex-1 overflow-hidden">
+        <Sidebar activePanel={activePanel} onNavigate={setActivePanel} />
+        <main className="flex-1 overflow-hidden flex">
+          {activePanel === "chat"      && <ChatPanel />}
+          {activePanel === "opencode"  && (
+            <OpenCodePanel
+              authToken={authToken}
+              onOpenProviders={() => setActivePanel("providers")}
+            />
+          )}
+          {activePanel === "providers" && <ProvidersPanel authToken={authToken} />}
+          {activePanel === "schedule"  && <SchedulePanel />}
+          {activePanel === "invoices"  && <InvoicesPanel />}
+          {activePanel === "route-map" && <RouteMapPanel />}
+          {activePanel === "profile"   && <ProfilePanel />}
+        </main>
+      </div>
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Auth screen (unchanged from original)
+// Auth screen
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PROVIDERS_AUTH = [
@@ -136,11 +217,11 @@ function AuthScreen({ onLogin }: { onLogin: () => void }) {
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        const err = await res.json();
+        const err = await res.json() as { detail?: string };
         setError(err.detail || "Authentication failed");
         return;
       }
-      const data = await res.json();
+      const data = await res.json() as { access_token: string };
       setAuthToken(data.access_token);
       onLogin();
     } catch {
@@ -158,7 +239,6 @@ function AuthScreen({ onLogin }: { onLogin: () => void }) {
           <p className="text-slate-500 mt-2">AI Assistant for Trades Businesses</p>
         </div>
 
-        {/* OAuth */}
         <div className="space-y-3 mb-6">
           {PROVIDERS_AUTH.map(provider => (
             <button
