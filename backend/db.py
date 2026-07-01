@@ -29,6 +29,44 @@ async def get_jobs_for_date(user_id: str, date: str) -> list[dict[str, Any]]:
     return result.data
 
 
+async def get_all_jobs(user_id: str) -> list[dict[str, Any]]:
+    """Fetch all jobs for a user, ordered by scheduled time descending."""
+    supabase = get_db()
+    result = supabase.table("jobs") \
+        .select("*") \
+        .eq("user_id", user_id) \
+        .order("scheduled_at", desc=True) \
+        .execute()
+    return result.data
+
+
+async def create_job(user_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    """Insert a new job row and return the created record."""
+    supabase = get_db()
+    payload = {**data, "user_id": user_id}
+    result = supabase.table("jobs").insert(payload).execute()
+    return result.data[0] if result.data else {}
+
+
+async def get_invoices(user_id: str) -> list[dict[str, Any]]:
+    """Fetch all invoices for a user, ordered by due_date descending."""
+    supabase = get_db()
+    result = supabase.table("invoices") \
+        .select("*") \
+        .eq("user_id", user_id) \
+        .order("due_date", desc=True) \
+        .execute()
+    return result.data
+
+
+async def create_invoice_record(user_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    """Insert a new invoice row and return the created record."""
+    supabase = get_db()
+    payload = {**data, "user_id": user_id}
+    result = supabase.table("invoices").insert(payload).execute()
+    return result.data[0] if result.data else {}
+
+
 async def update_job_coords(job_id: str, lat: float, lng: float):
     """Update a job's geocoded coordinates."""
     supabase = get_db()
