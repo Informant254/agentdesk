@@ -26,4 +26,6 @@ services:
       - key: ENCRYPTION_KEY
         sync: false
       - key: APP_URL
-        value: https://agentdesk.netlify.app
+        value: https://agentdesk-v2.netlify.app
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false

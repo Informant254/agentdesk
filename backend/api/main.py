@@ -11,6 +11,7 @@ from backend.security.auth import auth_manager
 from backend.security.audit import audit_logger
 from backend.opencode_server.websocket_proxy import router as opencode_router
 from backend.opencode_server.manager import opencode_manager
+from backend.api.route_map import router as route_map_router
 
 app = FastAPI(
     title="AgentDesk API",
@@ -34,6 +35,9 @@ app.add_middleware(
 )
 
 app.include_router(opencode_router)
+
+# Include Route Map routes
+app.include_router(route_map_router)
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────

@@ -6,11 +6,17 @@ import { ChatPanel } from "./ChatPanel";
 import { SchedulePanel } from "./SchedulePanel";
 import { InvoicesPanel } from "./InvoicesPanel";
 import { OpenCodePanel, ProvidersPanel } from "./opencode";
+import dynamic from "next/dynamic";
 import { ProfilePanel } from "./ProfilePanel";
 import { supabase } from "@/lib/supabase";
 import { setAuthToken } from "@/lib/api";
 
-type Panel = "chat" | "schedule" | "invoices" | "opencode" | "providers" | "profile";
+const RouteMapPanel = dynamic(
+  () => import("./RouteMapPanel").then(m => ({ default: m.RouteMapPanel })),
+  { ssr: false },
+);
+
+type Panel = "chat" | "schedule" | "invoices" | "opencode" | "providers" | "profile" | "route-map";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://agentdesk-mzx6.onrender.com";
 
@@ -71,6 +77,7 @@ export function Dashboard() {
         {activePanel === "providers" && <ProvidersPanel authToken={authToken} />}
         {activePanel === "schedule"  && <SchedulePanel />}
         {activePanel === "invoices"  && <InvoicesPanel />}
+        {activePanel === "route-map" && <RouteMapPanel />}
         {activePanel === "profile"   && <ProfilePanel />}
       </main>
     </div>

@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_key: str = ""
 
+    # Google Maps
+    google_maps_api_key: str = ""
+
     # Stripe
     stripe_secret_key: str = ""
 

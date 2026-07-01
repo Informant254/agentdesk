@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { MessageSquare, Calendar, FileText, Terminal, User, Key } from "lucide-react";
+import { MessageSquare, Calendar, FileText, Terminal, User, Key, Map } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 
-type Panel = "chat" | "schedule" | "invoices" | "opencode" | "providers" | "profile";
+type Panel = "chat" | "schedule" | "invoices" | "opencode" | "providers" | "profile" | "route-map";
 
 interface SidebarProps {
   activePanel: Panel;
@@ -17,6 +17,7 @@ const navItems: { id: Panel; label: string; icon: ReactNode; badge?: string }[] 
   { id: "opencode",  label: "OpenCode Terminal",  icon: <Terminal size={20} />, badge: "NEW" },
   { id: "providers", label: "AI Providers",       icon: <Key size={20} /> },
   { id: "schedule",  label: "Schedule",           icon: <Calendar size={20} /> },
+  { id: "route-map", label: "Route Map",           icon: <Map size={20} /> },
   { id: "invoices",  label: "Invoices",           icon: <FileText size={20} /> },
 ];
 

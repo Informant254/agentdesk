@@ -65,3 +65,14 @@ export const createInvoice = (jobId: string, lineItems: unknown[], dueDays = 30)
     method: "POST",
     body: JSON.stringify({ job_id: jobId, line_items: lineItems, due_days: dueDays }),
   });
+
+export const getRouteMap = (date: string, startingLocation?: string) => {
+  const params = new URLSearchParams({ date });
+  if (startingLocation) params.set("starting_location", startingLocation);
+  return apiFetch(`/api/workflows/route-map/${date}?starting_location=${encodeURIComponent(startingLocation || "")}`);
+};
+
+export const reorderRoute = (date: string, jobOrder: string[], startingLocation?: string) =>
+  apiFetch(`/api/workflows/route-map/reorder?date=${encodeURIComponent(date)}&job_order=${jobOrder.join(",")}&starting_location=${encodeURIComponent(startingLocation || "")}`, {
+    method: "POST",
+  });
